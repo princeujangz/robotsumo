@@ -1,0 +1,196 @@
+// Defining motor pins for ESP32 PWM control
+#define motor1A 16
+#define motor1B 17
+#define motor2A 18
+#define motor2B 19
+
+// Defining edge sensor pins for detecting white line (boundary)
+#define edgeLeft 32
+#define edgeRight 33
+
+// Defining opponent sensors (NPN, output LOW when opponent is detected)
+#define opponentRight 26      // Right opponent sensor
+#define opponentLeft 25       // Left opponent sensor
+#define opponentFrontLeft 13  // Front left opponent sensor
+#define opponentFrontCenter 27// Front center opponent sensor
+#define opponentFrontRight 14 // Front right opponent sensor
+
+// Defining push button pin
+#define startButton 34
+
+// Motor speed definitions
+#define FULL_SPEED 255
+#define HALF_SPEED 127  // Set the speed to half (127 out of 255)
+#define REVERSE_SPEED 102  // 40% of FULL_SPEED (255 * 0.4 = 102)
+
+// Threshold value to distinguish between black and white surface (for edge sensors)
+int whiteThreshold = 150;   // Value close to white surface (white surface value is 120)
+
+// Motor control function with PWM (using ledcWrite for ESP32)
+void moveMotor(int motor, int speed) {
+  // Ensure the speed is within limits (e.g., always use HALF_SPEED for cruising)
+  if (speed > FULL_SPEED) speed = FULL_SPEED;
+  if (speed < -FULL_SPEED) speed = -FULL_SPEED;
+  
+  if (motor == 1) {
+    if (speed > 0) {
+      ledcWrite(0, speed);  // Motor 1A forward
+      ledcWrite(1, 0);       // Motor 1B stop
+    } else {
+      ledcWrite(0, 0);       // Motor 1A stop
+      ledcWrite(1, -speed);  // Motor 1B reverse
+    }
+  } else if (motor == 2) {
+    if (speed > 0) {
+      ledcWrite(2, speed);  // Motor 2A forward
+      ledcWrite(3, 0);       // Motor 2B stop
+    } else {
+      ledcWrite(2, 0);       // Motor 2A stop
+      ledcWrite(3, -speed);  // Motor 2B reverse
+    }
+  }
+}
+
+// Check for edge detection (white line or boundary)
+bool checkForEdge() {
+  int leftSensorValue = analogRead(edgeLeft);
+  int rightSensorValue = analogRead(edgeRight);
+
+  // Debugging: Output sensor values to the serial monitor
+  Serial.print("Left sensor: ");
+  Serial.print(leftSensorValue);
+  Serial.print(" Right sensor: ");
+  Serial.println(rightSensorValue);
+
+  // If either edge sensor detects a white line (below the white threshold), return true
+  if (leftSensorValue < whiteThreshold || rightSensorValue < whiteThreshold) {
+    return true; // Edge detected (white line boundary)
+  }
+
+  return false; // No edge detected (robot cruising on black)
+}
+
+// Check for opponent presence (based on the new opponent sensors)
+bool checkForOpponent() {
+  int rightSensorValue = digitalRead(opponentRight);  // Right opponent sensor
+  int leftSensorValue = digitalRead(opponentLeft);    // Left opponent sensor
+  int frontLeftSensorValue = digitalRead(opponentFrontLeft); // Front left opponent sensor
+  int frontCenterSensorValue = digitalRead(opponentFrontCenter); // Front center opponent sensor
+  int frontRightSensorValue = digitalRead(opponentFrontRight); // Front right opponent sensor
+
+  // Debugging: Output sensor values to the serial monitor
+  Serial.print("Right sensor: ");
+  Serial.print(rightSensorValue);
+  Serial.print(" Left sensor: ");
+  Serial.print(leftSensorValue);
+  Serial.print(" Front Left sensor: ");
+  Serial.print(frontLeftSensorValue);
+  Serial.print(" Front Center sensor: ");
+  Serial.print(frontCenterSensorValue);
+  Serial.print(" Front Right sensor: ");
+  Serial.println(frontRightSensorValue);
+
+  // Return true if any opponent sensor detects an opponent (LOW signal for NPN)
+  if (rightSensorValue == LOW || leftSensorValue == LOW || frontLeftSensorValue == LOW ||
+      frontCenterSensorValue == LOW || frontRightSensorValue == LOW) {
+    return true;
+  }
+  return false;
+}
+
+void setup() {
+  // Initialize motor pins for PWM control (LED channel)
+  ledcSetup(0, 5000, 8);  // Channel 0 for motor 1A (frequency 5 kHz, 8-bit resolution)
+  ledcSetup(1, 5000, 8);  // Channel 1 for motor 1B
+  ledcSetup(2, 5000, 8);  // Channel 2 for motor 2A
+  ledcSetup(3, 5000, 8);  // Channel 3 for motor 2B
+  
+  // Attach the PWM channels to specific pins
+  ledcAttachPin(motor1A, 0);  // Attach motor 1A to PWM channel 0
+  ledcAttachPin(motor1B, 1);  // Attach motor 1B to PWM channel 1
+  ledcAttachPin(motor2A, 2);  // Attach motor 2A to PWM channel 2
+  ledcAttachPin(motor2B, 3);  // Attach motor 2B to PWM channel 3
+
+  // Initialize edge sensor pins
+  pinMode(edgeLeft, INPUT);
+  pinMode(edgeRight, INPUT);
+
+  // Initialize opponent sensor pins (NPN, so input LOW means opponent detected)
+  pinMode(opponentRight, INPUT_PULLUP);
+  pinMode(opponentLeft, INPUT_PULLUP);
+  pinMode(opponentFrontLeft, INPUT_PULLUP);
+  pinMode(opponentFrontCenter, INPUT_PULLUP);
+  pinMode(opponentFrontRight, INPUT_PULLUP);
+
+  // Initialize push button pin
+  pinMode(startButton, INPUT);
+
+  Serial.begin(115200); // For debugging
+}
+
+void loop() {
+  static unsigned long lastButtonPress = 0;
+  static bool started = false;
+
+  // Wait for push button to start (with debounce)
+  if (digitalRead(startButton) == HIGH && millis() - lastButtonPress > 2000) {
+    lastButtonPress = millis();
+    started = false; // Reset the start flag
+    Serial.println("Button pressed. Starting in 5 seconds...");
+    delay(5000); // Delay 5 seconds after button press
+    Serial.println("Starting the robot...");
+    started = true;
+  }
+
+  // After 5 seconds delay, start cruising
+  if (started) {
+    Serial.println("Cruising...");
+
+    // Check for opponent detection
+    if (checkForOpponent()) {
+      if (digitalRead(opponentRight) == LOW) {
+        // Right opponent detected: turn 90 degrees right and attack
+        Serial.println("Right opponent detected - Turning 90 degrees right and attacking!");
+        moveMotor(1, FULL_SPEED);  // Right motor forward
+        moveMotor(2, -FULL_SPEED); // Left motor backward
+        delay(500);  // Turn for 500ms
+        moveMotor(1, FULL_SPEED);  // Attack (move forward)
+        moveMotor(2, FULL_SPEED);  // Attack (move forward)
+      } else if (digitalRead(opponentLeft) == LOW) {
+        // Left opponent detected: turn 90 degrees left and attack
+        Serial.println("Left opponent detected - Turning 90 degrees left and attacking!");
+        moveMotor(1, -FULL_SPEED); // Right motor backward
+        moveMotor(2, FULL_SPEED);  // Left motor forward
+        delay(500);  // Turn for 500ms
+        moveMotor(1, FULL_SPEED);  // Attack (move forward)
+        moveMotor(2, FULL_SPEED);  // Attack (move forward)
+      } else if (digitalRead(opponentFrontCenter) == LOW) {
+        // Front center opponent detected: move forward and attack
+        Serial.println("Front center opponent detected - Moving forward and attacking!");
+        moveMotor(1, FULL_SPEED);  // Move forward
+        moveMotor(2, FULL_SPEED);  // Move forward
+      } else if (digitalRead(opponentFrontRight) == LOW) {
+        // Front right opponent detected: slight right turn and attack
+        Serial.println("Front right opponent detected - Slight right turn and attacking!");
+        moveMotor(1, FULL_SPEED);  // Right motor forward
+        moveMotor(2, HALF_SPEED);  // Left motor slower
+        delay(250);  // Slight right turn for 250ms
+        moveMotor(1, FULL_SPEED);  // Attack (move forward)
+        moveMotor(2, FULL_SPEED);  // Attack (move forward)
+      } else if (digitalRead(opponentFrontLeft) == LOW) {
+        // Front left opponent detected: slight left turn and attack
+        Serial.println("Front left opponent detected - Slight left turn and attacking!");
+        moveMotor(1, HALF_SPEED);  // Right motor slower
+        moveMotor(2, FULL_SPEED);  // Left motor forward
+        delay(250);  // Slight left turn for 250ms
+        moveMotor(1, FULL_SPEED);  // Attack (move forward)
+        moveMotor(2, FULL_SPEED);  // Attack (move forward)
+      }
+    } else {
+      // No opponent detected, continue cruising on black surface
+      Serial.println("No opponent detected - Cruising...");
+      moveMotor(1, HALF_SPEED);
+      moveMotor(2, HALF_SPEED);
+    }
+  }
+}
